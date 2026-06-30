@@ -1,0 +1,92 @@
+{
+  "entities": {
+    "PaymentMethod": {
+      "title": "Payment Method",
+      "description": "User linked bank account, credit card or wallet",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["wallet", "bank_account", "credit_card", "debit_card"] },
+        "name": { "type": "string" },
+        "number": { "type": "string" },
+        "balance": { "type": "number" },
+        "provider": { "type": "string" },
+        "userId": { "type": "string" }
+      },
+      "required": ["id", "type", "name", "number", "provider", "userId"]
+    },
+    "Contact": {
+      "title": "Contact",
+      "description": "A contact or merchant",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "upiId": { "type": "string" },
+        "avatarColor": { "type": "string" },
+        "isMerchant": { "type": "boolean" },
+        "avatarText": { "type": "string" },
+        "recentAmount": { "type": "number" }
+      },
+      "required": ["id", "name", "phone", "upiId", "avatarColor", "isMerchant", "avatarText"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "A payment ledger transaction record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "receiverId": { "type": "string" },
+        "receiverName": { "type": "string" },
+        "receiverAvatar": { "type": "string" },
+        "amount": { "type": "number" },
+        "timestamp": { "type": "string" },
+        "protocol": { "type": "string", "enum": ["online_101_1", "offline_201_3", "wallet_direct"] },
+        "status": { "type": "string", "enum": ["success", "pending_sync", "failed"] },
+        "paymentMethodId": { "type": "string" },
+        "paymentMethodName": { "type": "string" },
+        "category": { "type": "string" },
+        "note": { "type": "string" },
+        "protocolDetails": { "type": "object" },
+        "userId": { "type": "string" }
+      },
+      "required": ["id", "senderId", "senderName", "receiverId", "receiverName", "amount", "timestamp", "protocol", "status", "paymentMethodId", "paymentMethodName", "category", "userId"]
+    },
+    "ProtocolLog": {
+      "title": "Protocol Log",
+      "description": "Cryptographic protocol trace log",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "protocol": { "type": "string", "enum": ["101.1", "201.3", "SYSTEM"] },
+        "step": { "type": "string" },
+        "payload": { "type": "string" },
+        "type": { "type": "string", "enum": ["info", "success", "warning", "crypto"] },
+        "userId": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "protocol", "step", "payload", "type", "userId"]
+    }
+  },
+  "firestore": {
+    "/paymentMethods/{methodId}": {
+      "schema": "PaymentMethod",
+      "description": "Linked payment methods for users"
+    },
+    "/contacts/{contactId}": {
+      "schema": "Contact",
+      "description": "Shared contact directory"
+    },
+    "/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Ledger transactions"
+    },
+    "/protocolLogs/{logId}": {
+      "schema": "ProtocolLog",
+      "description": "User cryptographic debugging logs"
+    }
+  }
+}

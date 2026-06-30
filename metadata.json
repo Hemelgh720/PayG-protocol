@@ -1,0 +1,6 @@
+{
+  "name": "GPay Protocol Clone",
+  "description": "Google Pay clone featuring simulated Wallet, Payment Gateway, Online 101.1 secure handshake protocol, and Offline 201.3 acoustic/QR store-and-forward protocol.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

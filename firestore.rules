@@ -1,0 +1,115 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --- GLOBAL SAFETY NET (DEFAULT DENY) ---
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- SHARED HELPER FUNCTIONS ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // --- PAYMENT METHODS RULES ---
+    match /paymentMethods/{methodId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() 
+                    && isValidId(methodId)
+                    && request.resource.data.userId == request.auth.uid
+                    && isValidPaymentMethod(request.resource.data);
+      allow update: if isSignedIn()
+                    && resource.data.userId == request.auth.uid
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['balance'])
+                    && request.resource.data.balance is number;
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    function isValidPaymentMethod(data) {
+      return data.id is string && data.id.size() <= 128
+        && data.type is string && data.type in ['wallet', 'bank_account', 'credit_card', 'debit_card']
+        && data.name is string && data.name.size() <= 64
+        && data.number is string && data.number.size() <= 32
+        && data.provider is string && data.provider.size() <= 64
+        && (!('balance' in data) || data.balance is number);
+    }
+
+    // --- CONTACTS RULES (SHARED DIRECTORY) ---
+    match /contacts/{contactId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() 
+                            && isValidId(contactId) 
+                            && isValidContact(request.resource.data);
+      allow delete: if isSignedIn();
+    }
+
+    function isValidContact(data) {
+      return data.id is string && data.id.size() <= 128
+        && data.name is string && data.name.size() <= 64
+        && data.phone is string && data.phone.size() <= 32
+        && data.upiId is string && data.upiId.size() <= 64
+        && data.avatarColor is string && data.avatarColor.size() <= 64
+        && data.isMerchant is bool
+        && data.avatarText is string && data.avatarText.size() <= 8;
+    }
+
+    // --- TRANSACTIONS RULES (IMMUTABLE PAYMENTS HISTORY) ---
+    match /transactions/{transactionId} {
+      allow get, list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn()
+                    && isValidId(transactionId)
+                    && request.resource.data.userId == request.auth.uid
+                    && isValidTransaction(request.resource.data);
+      allow update: if isSignedIn()
+                    && resource.data.userId == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+                    && resource.data.status == 'pending_sync'
+                    && request.resource.data.status == 'success';
+      allow delete: if false; // Transactions can never be deleted
+    }
+
+    function isValidTransaction(data) {
+      return data.id is string && data.id.size() <= 128
+        && data.senderId is string && data.senderId.size() <= 128
+        && data.senderName is string && data.senderName.size() <= 64
+        && data.receiverId is string && data.receiverId.size() <= 128
+        && data.receiverName is string && data.receiverName.size() <= 64
+        && data.amount is number && data.amount >= 0
+        && data.timestamp is string && data.timestamp.size() <= 64
+        && data.protocol is string && data.protocol in ['online_101_1', 'offline_201_3', 'wallet_direct']
+        && data.status is string && data.status in ['success', 'pending_sync', 'failed']
+        && data.paymentMethodId is string && data.paymentMethodId.size() <= 128
+        && data.paymentMethodName is string && data.paymentMethodName.size() <= 64
+        && data.category is string && data.category.size() <= 64;
+    }
+
+    // --- PROTOCOL DEBUGGER LOGS RULES ---
+    match /protocolLogs/{logId} {
+      allow get, list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn()
+                    && isValidId(logId)
+                    && request.resource.data.userId == request.auth.uid
+                    && isValidProtocolLog(request.resource.data);
+      allow update, delete: if false; // Audit logs are immutable
+    }
+
+    function isValidProtocolLog(data) {
+      return data.id is string && data.id.size() <= 128
+        && data.timestamp is string && data.timestamp.size() <= 64
+        && data.protocol is string && data.protocol in ['101.1', '201.3', 'SYSTEM']
+        && data.step is string && data.step.size() <= 256
+        && data.payload is string && data.payload.size() <= 10000
+        && data.type is string && data.type in ['info', 'success', 'warning', 'crypto'];
+    }
+  }
+}
