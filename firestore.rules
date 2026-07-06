@@ -72,9 +72,15 @@ service cloud.firestore {
                     && isValidTransaction(request.resource.data);
       allow update: if isSignedIn()
                     && resource.data.userId == request.auth.uid
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
-                    && resource.data.status == 'pending_sync'
-                    && request.resource.data.status == 'success';
+                    && (
+                      (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+                       && resource.data.status == 'pending_sync'
+                       && request.resource.data.status == 'success')
+                      ||
+                      (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isCaptured'])
+                       && (!('isCaptured' in resource.data) || resource.data.isCaptured == false)
+                       && request.resource.data.isCaptured == true)
+                    );
       allow delete: if false; // Transactions can never be deleted
     }
 
@@ -90,7 +96,10 @@ service cloud.firestore {
         && data.status is string && data.status in ['success', 'pending_sync', 'failed']
         && data.paymentMethodId is string && data.paymentMethodId.size() <= 128
         && data.paymentMethodName is string && data.paymentMethodName.size() <= 64
-        && data.category is string && data.category.size() <= 64;
+        && data.category is string && data.category.size() <= 64
+        && (!('mode' in data) || (data.mode is string && data.mode in ['sale', 'pre_auth', 'bank_transfer']))
+        && (!('approvalCode' in data) || (data.approvalCode is string && data.approvalCode.size() <= 64))
+        && (!('isCaptured' in data) || data.isCaptured is bool);
     }
 
     // --- PROTOCOL DEBUGGER LOGS RULES ---

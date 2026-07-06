@@ -22,6 +22,7 @@ export const INITIAL_PAYMENT_METHODS: PaymentMethod[] = [
     type: 'credit_card',
     name: 'Visa Signature Card',
     number: '•••• 8821',
+    balance: 5000.00,
     provider: 'Visa'
   },
   {
@@ -29,6 +30,7 @@ export const INITIAL_PAYMENT_METHODS: PaymentMethod[] = [
     type: 'debit_card',
     name: 'Mastercard Debit',
     number: '•••• 1290',
+    balance: 2500.00,
     provider: 'Mastercard'
   }
 ];

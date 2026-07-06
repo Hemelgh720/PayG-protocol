@@ -1,5 +1,33 @@
 import { ProtocolLog } from '../types';
 
+// Environment Variable Configurations with Fallbacks
+const metaEnv = (import.meta as any).env || {};
+export const PAYG_PRIMARY_ALGORITHM = metaEnv.VITE_PAYG_PRIMARY_ALGORITHM || metaEnv.PAYG_PRIMARY_ALGORITHM || "AES-256-GCM";
+export const PAYG_SIGNATURE_ALGORITHM = metaEnv.VITE_PAYG_SIGNATURE_ALGORITHM || metaEnv.PAYG_SIGNATURE_ALGORITHM || "Ed25519";
+export const HANDSHAKE_LATENCY_DELAY_MS = parseInt(metaEnv.VITE_HANDSHAKE_LATENCY_DELAY_MS || metaEnv.HANDSHAKE_LATENCY_DELAY_MS || "100", 10) || 100;
+export const ONLINE_HANDSHAKE_TIMEOUT_MS = parseInt(metaEnv.VITE_ONLINE_HANDSHAKE_TIMEOUT_MS || metaEnv.ONLINE_HANDSHAKE_TIMEOUT_MS || "10000", 10) || 10000;
+export const ENCLAVE_SIGNING_CO_PROCESSOR = metaEnv.VITE_ENCLAVE_SIGNING_CO_PROCESSOR || metaEnv.ENCLAVE_SIGNING_CO_PROCESSOR || "AWS_NITRO";
+export const HSM_PROVIDER = metaEnv.VITE_HSM_PROVIDER || metaEnv.HSM_PROVIDER || "AWS_CLOUDHSM";
+export const HSM_KEY_LABEL = metaEnv.VITE_HSM_KEY_LABEL || metaEnv.HSM_KEY_LABEL || "PAYG_SIGNING_KEY";
+export const GATEWAY_AUTHENTICATION_KEY = metaEnv.VITE_GATEWAY_AUTHENTICATION_KEY || metaEnv.GATEWAY_AUTHENTICATION_KEY || "";
+
+// New Digital Signature Specifications
+export const PRIMARY_SIGNATURE_ALGORITHM = metaEnv.VITE_PRIMARY_SIGNATURE_ALGORITHM || metaEnv.PRIMARY_SIGNATURE_ALGORITHM || "Ed25519";
+export const SECONDARY_SIGNATURE_ALGORITHM = metaEnv.VITE_SECONDARY_SIGNATURE_ALGORITHM || metaEnv.SECONDARY_SIGNATURE_ALGORITHM || "ECDSA-P256";
+export const LEGACY_SIGNATURE_ALGORITHM = metaEnv.VITE_LEGACY_SIGNATURE_ALGORITHM || metaEnv.LEGACY_SIGNATURE_ALGORITHM || "RSA-PSS-3072";
+
+export const PAYG_SIGNATURE_VERSION = metaEnv.VITE_PAYG_SIGNATURE_VERSION || metaEnv.PAYG_SIGNATURE_VERSION || "1.0";
+export const PAYG_SIGNATURE_HASH = metaEnv.VITE_PAYG_SIGNATURE_HASH || metaEnv.PAYG_SIGNATURE_HASH || "SHA-512";
+export const PAYG_SIGNATURE_KEY_SIZE = parseInt(metaEnv.VITE_PAYG_SIGNATURE_KEY_SIZE || metaEnv.PAYG_SIGNATURE_KEY_SIZE || "256", 10) || 256;
+export const PAYG_SIGNATURE_ENCODING = metaEnv.VITE_PAYG_SIGNATURE_ENCODING || metaEnv.PAYG_SIGNATURE_ENCODING || "Base64URL";
+export const PAYG_SIGNATURE_VERIFICATION = metaEnv.VITE_PAYG_SIGNATURE_VERIFICATION || metaEnv.PAYG_SIGNATURE_VERIFICATION || "STRICT";
+export const PAYG_SIGNATURE_ROTATION_DAYS = parseInt(metaEnv.VITE_PAYG_SIGNATURE_ROTATION_DAYS || metaEnv.PAYG_SIGNATURE_ROTATION_DAYS || "90", 10) || 90;
+export const PAYG_SIGNATURE_HSM_REQUIRED = (metaEnv.VITE_PAYG_SIGNATURE_HSM_REQUIRED || metaEnv.PAYG_SIGNATURE_HSM_REQUIRED || "true") === "true" || metaEnv.PAYG_SIGNATURE_HSM_REQUIRED === true;
+export const PAYG_SIGNATURE_FIPS_MODE = metaEnv.VITE_PAYG_SIGNATURE_FIPS_MODE || metaEnv.PAYG_SIGNATURE_FIPS_MODE || "Optional";
+export const PAYG_SIGNATURE_PROVIDER = metaEnv.VITE_PAYG_SIGNATURE_PROVIDER || metaEnv.PAYG_SIGNATURE_PROVIDER || "libsodium";
+export const PAYG_SIGNATURE_FAIL_POLICY = metaEnv.VITE_PAYG_SIGNATURE_FAIL_POLICY || metaEnv.PAYG_SIGNATURE_FAIL_POLICY || "DENY";
+export const PAYG_SIGNATURE_LOGGING = metaEnv.VITE_PAYG_SIGNATURE_LOGGING || metaEnv.PAYG_SIGNATURE_LOGGING || "ENABLED";
+
 // Simple but authentic-looking hashing utility for simulation (mimicking HMAC-SHA256)
 export function calculateSimulatedHash(input: string, key: string = "gpay_secret_key"): string {
   let hash1 = 0;
@@ -46,12 +74,18 @@ export async function simulateOnline101Handshake(
       action: "INITIATE_HANDSHAKE",
       timestamp: new Date().toISOString(),
       client_fingerprint: fingerprint,
-      channel: "SSL/TLS_V1.3_SECURE"
+      channel: "SSL/TLS_V1.3_SECURE",
+      handshake_timeout_limit_ms: ONLINE_HANDSHAKE_TIMEOUT_MS
     }, null, 2),
     "info"
   );
   
-  await new Promise(r => setTimeout(r, 150)); // Network delay
+  // Distribute the dynamic latency across the handshake phases
+  const delay1 = Math.max(10, Math.round(HANDSHAKE_LATENCY_DELAY_MS * 0.35));
+  const delay2 = Math.max(10, Math.round(HANDSHAKE_LATENCY_DELAY_MS * 0.40));
+  const delay3 = Math.max(10, Math.round(HANDSHAKE_LATENCY_DELAY_MS * 0.25));
+
+  await new Promise(r => setTimeout(r, delay1)); // Dynamic Phase 1 delay
 
   // Step 2: Challenge Seed
   const challengeSeed = `SEED_${Math.floor(Math.random() * 1000000).toString().padStart(6, '0')}`;
@@ -62,12 +96,12 @@ export async function simulateOnline101Handshake(
       received_from: "PAYMENT_GATEWAY_PRIMARY",
       server_seed: challengeSeed,
       challenge_token: `CHALLENGE_${generateUUID().slice(5, 13).toUpperCase()}`,
-      supported_algorithms: ["ECDSA_P256", "HMAC_SHA256"]
+      supported_algorithms: [PAYG_PRIMARY_ALGORITHM, PAYG_SIGNATURE_ALGORITHM]
     }, null, 2),
     "crypto"
   );
   
-  await new Promise(r => setTimeout(r, 180)); // Verification and solve
+  await new Promise(r => setTimeout(r, delay2)); // Dynamic Phase 2 delay
 
   // Step 3: Solve Challenge & Sign Transaction
   const payloadToSign = `${amount}:${senderName}:${receiverName}:${paymentMethod}:${challengeSeed}`;
@@ -79,12 +113,30 @@ export async function simulateOnline101Handshake(
       action: "SOLVE_CHALLENGE",
       signed_payload: payloadToSign,
       crypto_signature: clientSignature,
-      sign_method: "ECDSA_P256_WITH_SHA256"
+      sign_method: `${PAYG_PRIMARY_ALGORITHM}_WITH_${PAYG_SIGNATURE_ALGORITHM}`,
+      secure_enclave: ENCLAVE_SIGNING_CO_PROCESSOR,
+      ...(ENCLAVE_SIGNING_CO_PROCESSOR === "HSM" ? {
+        hsm_provider: HSM_PROVIDER,
+        hsm_key_label: HSM_KEY_LABEL
+      } : {}),
+      signature_spec: {
+        version: PAYG_SIGNATURE_VERSION,
+        hash_algorithm: PAYG_SIGNATURE_HASH,
+        key_size_bits: PAYG_SIGNATURE_KEY_SIZE,
+        encoding: PAYG_SIGNATURE_ENCODING,
+        verification_level: PAYG_SIGNATURE_VERIFICATION,
+        rotation_cycle_days: PAYG_SIGNATURE_ROTATION_DAYS,
+        hsm_enforced: PAYG_SIGNATURE_HSM_REQUIRED,
+        fips_compliant: PAYG_SIGNATURE_FIPS_MODE,
+        provider: PAYG_SIGNATURE_PROVIDER,
+        fail_policy: PAYG_SIGNATURE_FAIL_POLICY,
+        system_logging: PAYG_SIGNATURE_LOGGING
+      }
     }, null, 2),
     "crypto"
   );
 
-  await new Promise(r => setTimeout(r, 120));
+  await new Promise(r => setTimeout(r, delay3)); // Dynamic Phase 3 delay
 
   // Step 4: Verify & Authorize
   const txRefId = `AUTH_${Math.floor(Math.random() * 900000 + 100000)}`;
@@ -94,7 +146,9 @@ export async function simulateOnline101Handshake(
       status: "AUTHORIZED",
       authorization_code: txRefId,
       settlement_status: "CLEARED",
-      ledger_update: "SUCCESS"
+      ledger_update: "SUCCESS",
+      gateway_key_configured: !!GATEWAY_AUTHENTICATION_KEY,
+      gateway_key_masked: GATEWAY_AUTHENTICATION_KEY ? `${GATEWAY_AUTHENTICATION_KEY.slice(0, 5)}...` : "INJECTED_DEFAULT"
     }, null, 2),
     "success"
   );
@@ -128,7 +182,8 @@ export function generateOffline201Token(
       internet_connection: "DISCONNECTED",
       offline_engine: "ACTIVE",
       cached_token_sequence: sequence,
-      device_battery_status: "SECURE"
+      device_battery_status: "SECURE",
+      hardware_enclave: ENCLAVE_SIGNING_CO_PROCESSOR
     }, null, 2),
     "info"
   );
@@ -164,7 +219,7 @@ export function generateOffline201Token(
       raw_payload_length_bytes: offlineString.length,
       compressed_token: tokenPayload,
       local_signature: signature,
-      verification_protocol: "ECC_CURVE_25519"
+      verification_protocol: PAYG_SIGNATURE_ALGORITHM
     }, null, 2),
     "crypto"
   );

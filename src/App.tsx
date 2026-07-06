@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, User, signInWithPopup, signOut } from 'firebase/auth';
-import { auth, googleProvider } from './lib/firebase';
+import { onSnapshot, collection, query, where } from 'firebase/firestore';
+import { auth, googleProvider, db, handleFirestoreError, OperationType } from './lib/firebase';
 import { 
   fetchUserPaymentMethods, 
   fetchUserTransactions, 
@@ -25,15 +26,29 @@ import {
   ProtocolLog, 
   ProtocolType 
 } from './types';
-import { generateUUID } from './utils/crypto';
+import { 
+  generateUUID,
+  PAYG_PRIMARY_ALGORITHM,
+  PAYG_SIGNATURE_ALGORITHM,
+  HANDSHAKE_LATENCY_DELAY_MS,
+  ONLINE_HANDSHAKE_TIMEOUT_MS,
+  ENCLAVE_SIGNING_CO_PROCESSOR,
+  HSM_PROVIDER,
+  HSM_KEY_LABEL,
+  GATEWAY_AUTHENTICATION_KEY
+} from './utils/crypto';
 import GPayHeader from './components/GPayHeader';
 import WalletSection from './components/WalletSection';
 import QuickActions from './components/QuickActions';
+import CardTransferEngine from './components/CardTransferEngine';
 import ContactsGrid from './components/ContactsGrid';
 import TransactionHistory from './components/TransactionHistory';
 import ProtocolDebugger from './components/ProtocolDebugger';
+import ProtocolPipelineVisualizer from './components/ProtocolPipelineVisualizer';
 import PaymentModal from './components/PaymentModal';
 import ProtocolHelpModal from './components/ProtocolHelpModal';
+import AuthErrorModal from './components/AuthErrorModal';
+import PaymentTerminal from './components/PaymentTerminal';
 import { Shield, Check, Wifi, AlertCircle, Info, Landmark, Cloud, CloudOff } from 'lucide-react';
 
 export default function App() {
@@ -58,9 +73,54 @@ export default function App() {
   // --- NOTIFICATION / SUCCESS TOAST STATE ---
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'warning' | 'info' } | null>(null);
 
+  // --- LIVE PRODUCTION ENCLAVE STATES ---
+  const [isLiveMode, setIsLiveMode] = useState<boolean>(() => {
+    return localStorage.getItem('gpay_live_mode') === 'true';
+  });
+  const [liveWalletBalance, setLiveWalletBalance] = useState<number>(() => {
+    const saved = localStorage.getItem('gpay_live_balance');
+    return saved ? parseFloat(saved) : 1250.00;
+  });
+
+  // Dynamic override mapping for wallet balance in UI components
+  const activePaymentMethods = paymentMethods.map(m => {
+    if (m.id === 'method_wallet') {
+      return { ...m, balance: isLiveMode ? liveWalletBalance : m.balance };
+    }
+    return m;
+  });
+
+  // Trigger local storage save whenever live mode toggles
+  const handleToggleLiveMode = (live: boolean) => {
+    setIsLiveMode(live);
+    localStorage.setItem('gpay_live_mode', String(live));
+    
+    addProtocolLog(
+      `Environment switched to ${live ? 'LIVE (PRODUCTION)' : 'DEMO (SANDBOX)'}`,
+      JSON.stringify({
+        action: "ENVIRONMENT_STATE_CHANGE",
+        is_live: live,
+        enclave_provider: live ? "AWS_CLOUD_HSM_v3" : "SANDBOX_MOCK_VAULT",
+        security_level: live ? "FIPS_140-2_LEVEL_3" : "SANDBOX_LEVEL_1",
+        signing_key_slot: live ? "PAYG_PROD_SIGN_01" : "PAYG_TEST_SIGN_01",
+        gateway_endpoint: live ? "https://gateway-live.gpay.secure/v3" : "https://gateway.gpay.secure/v3"
+      }, null, 2),
+      live ? 'success' : 'warning',
+      'SYSTEM'
+    );
+
+    triggerToast(
+      live 
+        ? "Switched to HSM Enclave Production Environment! Secure live mode active." 
+        : "Switched back to local Demo Sandbox environment.",
+      live ? 'success' : 'info'
+    );
+  };
+
   // --- FIREBASE SECURITY & AUTH STATES ---
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isSyncingWithCloud, setIsSyncingWithCloud] = useState<boolean>(false);
+  const [authErrorModal, setAuthErrorModal] = useState<{ isOpen: boolean; message: string; type: 'closed' | 'blocked' | 'other' } | null>(null);
 
   // --- GOOGLE SIGN IN & LOGOUT HANDLERS ---
   const handleLogin = async () => {
@@ -68,11 +128,47 @@ export default function App() {
       setIsSyncingWithCloud(true);
       await signInWithPopup(auth, googleProvider);
     } catch (e: any) {
-      console.error(e);
-      if (e.code === 'auth/popup-closed-by-user') {
-        triggerToast("Sign in cancelled.", "info");
+      const isPopupClosed = e.code === 'auth/popup-closed-by-user' || 
+                            e.message?.includes('popup-closed-by-user') ||
+                            e.message?.includes('cancelled-by-user') ||
+                            e.message?.includes('popup closed') ||
+                            e.message?.includes('popup-closed');
+      
+      const isPopupBlocked = e.code === 'auth/popup-blocked' || 
+                             e.message?.includes('popup-blocked') ||
+                             e.message?.includes('popup blocked');
+
+      if (isPopupClosed || isPopupBlocked) {
+        console.warn("Firebase auth warning (popup closed or blocked):", e.message || e);
       } else {
-        triggerToast("Sign in failed. Security protocol denied.", "warning");
+        console.error("Firebase auth error:", e);
+      }
+
+      const isIframe = window.self !== window.top;
+
+      if (isPopupClosed) {
+        setAuthErrorModal({
+          isOpen: true,
+          type: 'closed',
+          message: isIframe 
+            ? "The authentication popup was closed or blocked. Because you are currently viewing this application inside the AI Studio preview iframe, browser safety constraints frequently prevent the Google Sign-In popup from opening."
+            : "The authentication popup was closed before completing the sign-in flow. Please ensure you keep the Google window open until sign-in completes."
+        });
+        triggerToast("Sign in cancelled or blocked.", "warning");
+      } else if (isPopupBlocked) {
+        setAuthErrorModal({
+          isOpen: true,
+          type: 'blocked',
+          message: "Your browser's popup blocker stopped the Google Sign-In window from launching. Please allow popups for this site, or open this application in a new tab."
+        });
+        triggerToast("Popup blocked by browser.", "warning");
+      } else {
+        setAuthErrorModal({
+          isOpen: true,
+          type: 'other',
+          message: e.message || "An unexpected error occurred during cloud synchronization handshake. Please check your network or try again."
+        });
+        triggerToast("Authentication error occurred.", "warning");
       }
     } finally {
       setIsSyncingWithCloud(false);
@@ -94,23 +190,78 @@ export default function App() {
 
   // --- INITIALIZATION & CLOUD DATABASE SYNC HOOK ---
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    let unsubPaymentMethods: (() => void) | null = null;
+    let unsubTransactions: (() => void) | null = null;
+    let unsubLogs: (() => void) | null = null;
+    let unsubContacts: (() => void) | null = null;
+
+    const cleanupListeners = () => {
+      if (unsubPaymentMethods) { unsubPaymentMethods(); unsubPaymentMethods = null; }
+      if (unsubTransactions) { unsubTransactions(); unsubTransactions = null; }
+      if (unsubLogs) { unsubLogs(); unsubLogs = null; }
+      if (unsubContacts) { unsubContacts(); unsubContacts = null; }
+    };
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
+      cleanupListeners();
+
       if (user) {
         setIsSyncingWithCloud(true);
         try {
-          const cloudMethods = await fetchUserPaymentMethods(user.uid);
-          const cloudTransactions = await fetchUserTransactions(user.uid);
-          const cloudLogs = await fetchUserLogs(user.uid);
-          const cloudContacts = await fetchContacts();
+          // Pre-seed if collections are empty so we have initial mock data seeded to this user's Cloud project
+          await fetchUserPaymentMethods(user.uid);
+          await fetchContacts();
 
-          // Merge if local has any non-synced transactions
-          setPaymentMethods(cloudMethods);
-          setTransactions(cloudTransactions);
-          setLogs(cloudLogs);
-          setContacts(cloudContacts);
-          
-          triggerToast(`Secured cloud vault loaded for ${user.displayName || 'user'}!`, 'success');
+          // Set up real-time listeners
+          unsubPaymentMethods = onSnapshot(
+            query(collection(db, 'paymentMethods'), where('userId', '==', user.uid)),
+            (snapshot) => {
+              const methods = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as PaymentMethod));
+              if (methods.length > 0) {
+                setPaymentMethods(methods);
+                const wallet = methods.find(m => m.id === 'method_wallet');
+                if (wallet && wallet.balance !== undefined) {
+                  setLiveWalletBalance(wallet.balance);
+                  localStorage.setItem('gpay_live_balance', wallet.balance.toString());
+                }
+              }
+            },
+            (error) => handleFirestoreError(error, OperationType.GET, 'paymentMethods')
+          );
+
+          unsubTransactions = onSnapshot(
+            query(collection(db, 'transactions'), where('userId', '==', user.uid)),
+            (snapshot) => {
+              const txs = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Transaction));
+              txs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+              setTransactions(txs);
+            },
+            (error) => handleFirestoreError(error, OperationType.GET, 'transactions')
+          );
+
+          unsubLogs = onSnapshot(
+            query(collection(db, 'protocolLogs'), where('userId', '==', user.uid)),
+            (snapshot) => {
+              const logsData = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ProtocolLog));
+              logsData.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+              setLogs(logsData);
+            },
+            (error) => handleFirestoreError(error, OperationType.GET, 'protocolLogs')
+          );
+
+          unsubContacts = onSnapshot(
+            collection(db, 'contacts'),
+            (snapshot) => {
+              const cts = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Contact));
+              if (cts.length > 0) {
+                setContacts(cts);
+              }
+            },
+            (error) => handleFirestoreError(error, OperationType.GET, 'contacts')
+          );
+
+          triggerToast(`Secured real-time cloud vault loaded for ${user.displayName || 'user'}!`, 'success');
         } catch (e) {
           console.error(e);
           triggerToast("Cloud synchronizer failed. Security rules active.", "warning");
@@ -151,8 +302,13 @@ export default function App() {
             step: 'GPay Crypto Core Initialized',
             payload: JSON.stringify({
               secure_enclave: "ACTIVE",
-              elliptic_curve: "ECDSA_P256",
-              local_symmetric_signing: "ECC_CURVE_25519",
+              enclave_signing_co_processor: ENCLAVE_SIGNING_CO_PROCESSOR,
+              ...(ENCLAVE_SIGNING_CO_PROCESSOR === "HSM" ? {
+                hsm_provider: HSM_PROVIDER,
+                hsm_key_label: HSM_KEY_LABEL
+              } : {}),
+              primary_algorithm: PAYG_PRIMARY_ALGORITHM,
+              signature_algorithm: PAYG_SIGNATURE_ALGORITHM,
               key_status: "PROVISIONED_SECURELY"
             }, null, 2),
             type: 'success'
@@ -166,7 +322,10 @@ export default function App() {
               server_endpoint: "https://gateway.gpay.secure/v3",
               primary_ip: "104.24.120.91",
               routing_protocol: "TCP/SSL_v1.3",
-              active_channels: ["101.1_ONLINE_SETTLE"]
+              active_channels: ["101.1_ONLINE_SETTLE"],
+              handshake_timeout_ms: ONLINE_HANDSHAKE_TIMEOUT_MS,
+              handshake_latency_delay_ms: HANDSHAKE_LATENCY_DELAY_MS,
+              gateway_key_configured: !!GATEWAY_AUTHENTICATION_KEY
             }, null, 2),
             type: 'info'
           }
@@ -180,7 +339,10 @@ export default function App() {
       setOfflineSequence(parseInt(savedSeq));
     }
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribeAuth();
+      cleanupListeners();
+    };
   }, []);
 
   // --- UTILITY: POP TOAST ---
@@ -232,7 +394,7 @@ export default function App() {
       triggerToast(
         nextState 
           ? "Back online! 101.1 Clearing Handshake is now ACTIVE." 
-          : "Offline mode active. GPay 201.3 Acoustic & QR protocols engaged.",
+          : "Offline mode active. PayG 201.3 Acoustic & QR protocols engaged.",
         nextState ? 'success' : 'warning'
       );
       return nextState;
@@ -349,20 +511,92 @@ export default function App() {
 
   // --- LOAD MONEY INTO GPAY WALLET ---
   const handleTopUpWallet = async (amount: number, bankMethodId: string): Promise<boolean> => {
-    const sourceBank = paymentMethods.find(m => m.id === bankMethodId);
-    if (!sourceBank || sourceBank.balance === undefined || sourceBank.balance < amount) {
-      triggerToast("Insufficient funds in the selected source bank account!", "warning");
+    const sourceMethod = paymentMethods.find(m => m.id === bankMethodId);
+    if (!sourceMethod || sourceMethod.balance === undefined || sourceMethod.balance < amount) {
+      const sourceLabel = sourceMethod?.type === 'bank_account' ? 'bank account' : 'card';
+      triggerToast(`Insufficient funds in the selected source ${sourceLabel}!`, "warning");
       return false;
     }
 
+    if (isLiveMode) {
+      const newSourceBalance = (sourceMethod.balance ?? 0) - amount;
+      const newLiveBalance = liveWalletBalance + amount;
+
+      setLiveWalletBalance(newLiveBalance);
+      localStorage.setItem('gpay_live_balance', newLiveBalance.toString());
+
+      const updatedMethods = paymentMethods.map(m => {
+        if (m.id === bankMethodId) {
+          return { ...m, balance: newSourceBalance };
+        }
+        return m;
+      });
+      setPaymentMethods(updatedMethods);
+
+      if (currentUser) {
+        updatePaymentMethodBalanceInCloud(currentUser.uid, bankMethodId, newSourceBalance).catch(console.error);
+      } else {
+        localStorage.setItem('gpay_methods', JSON.stringify(updatedMethods));
+      }
+
+      const loadTx: Transaction = {
+        id: `tx_load_${generateUUID()}`,
+        senderId: bankMethodId,
+        senderName: sourceMethod.name,
+        receiverId: 'user_current',
+        receiverName: 'You (PayG Wallet - LIVE)',
+        receiverAvatar: 'Wallet',
+        amount,
+        timestamp: new Date().toISOString(),
+        protocol: 'online_101_1',
+        status: 'success',
+        paymentMethodId: bankMethodId,
+        paymentMethodName: sourceMethod.name,
+        category: 'Top Up',
+        note: 'Live Enclave Cash Load',
+        userId: currentUser ? currentUser.uid : 'user_current',
+        protocolDetails: {
+          handshakeLatency: 45,
+          signature: 'SIG_LIVE_HSM_' + Math.random().toString(36).substring(3, 11).toUpperCase()
+        }
+      };
+
+      const updatedTx = [loadTx, ...transactions];
+      setTransactions(updatedTx);
+
+      if (currentUser) {
+        await addTransactionToCloud(currentUser.uid, loadTx);
+      } else {
+        localStorage.setItem('gpay_transactions', JSON.stringify(updatedTx));
+      }
+
+      addProtocolLog(
+        `[LIVE HSM CLEARING] Wallet Cash Load: $${amount}`,
+        JSON.stringify({
+          source_account: sourceMethod.name,
+          source_type: sourceMethod.type,
+          target_account: "Live PayG Secure Balance",
+          transfer_amount: amount,
+          hardware_security_module: "AWS_CloudHSM_FIPS_140-2",
+          key_identifier: "PAYG_PROD_SIGN_01",
+          clearing_auth_ref: loadTx.id
+        }, null, 2),
+        'success',
+        '101.1'
+      );
+
+      triggerToast(`Successfully loaded $${amount.toFixed(2)} to Live PayG Secure Balance!`, "success");
+      return true;
+    }
+
     const walletMethod = paymentMethods.find(m => m.type === 'wallet');
-    const newBankBalance = (sourceBank.balance ?? 0) - amount;
+    const newSourceBalance = (sourceMethod.balance ?? 0) - amount;
     const newWalletBalance = ((walletMethod?.balance) ?? 0) + amount;
 
-    // Subtract from bank, add to wallet
+    // Subtract from source, add to wallet
     const updatedMethods = paymentMethods.map(m => {
       if (m.id === bankMethodId) {
-        return { ...m, balance: newBankBalance };
+        return { ...m, balance: newSourceBalance };
       }
       if (m.type === 'wallet') {
         return { ...m, balance: newWalletBalance };
@@ -374,7 +608,7 @@ export default function App() {
 
     if (currentUser) {
       // Async write to Firestore
-      updatePaymentMethodBalanceInCloud(currentUser.uid, bankMethodId, newBankBalance).catch(console.error);
+      updatePaymentMethodBalanceInCloud(currentUser.uid, bankMethodId, newSourceBalance).catch(console.error);
       if (walletMethod) {
         updatePaymentMethodBalanceInCloud(currentUser.uid, walletMethod.id, newWalletBalance).catch(console.error);
       }
@@ -386,16 +620,16 @@ export default function App() {
     const loadTx: Transaction = {
       id: `tx_load_${generateUUID()}`,
       senderId: bankMethodId,
-      senderName: sourceBank.name,
+      senderName: sourceMethod.name,
       receiverId: 'user_current',
-      receiverName: 'You (GPay Wallet)',
+      receiverName: 'You (PayG Wallet)',
       receiverAvatar: 'Wallet',
       amount,
       timestamp: new Date().toISOString(),
       protocol: 'online_101_1',
       status: 'success',
       paymentMethodId: bankMethodId,
-      paymentMethodName: sourceBank.name,
+      paymentMethodName: sourceMethod.name,
       category: 'Top Up',
       note: 'Loaded cash to wallet',
       userId: currentUser ? currentUser.uid : 'user_current',
@@ -417,8 +651,9 @@ export default function App() {
     addProtocolLog(
       `Wallet Cash Load: $${amount}`,
       JSON.stringify({
-        source_account: sourceBank.name,
-        target_account: "GPay Secure Balance",
+        source_account: sourceMethod.name,
+        source_type: sourceMethod.type,
+        target_account: "PayG Secure Balance",
         transfer_amount: amount,
         clearing_auth_ref: loadTx.id
       }, null, 2),
@@ -426,7 +661,7 @@ export default function App() {
       '101.1'
     );
 
-    triggerToast(`Loaded $${amount.toFixed(2)} to GPay Balance!`);
+    triggerToast(`Loaded $${amount.toFixed(2)} to PayG Balance!`);
     return true;
   };
 
@@ -445,24 +680,34 @@ export default function App() {
     let updatedMethods = [...paymentMethods];
     let newBalance = 0;
     
-    if (methodSelected && methodSelected.balance !== undefined) {
-      newBalance = Math.max(0, (methodSelected.balance ?? 0) - amount);
-      updatedMethods = paymentMethods.map(m => {
-        if (m.id === methodId) {
-          return { ...m, balance: newBalance };
+      if (methodSelected && methodSelected.balance !== undefined) {
+        if (isLiveMode && methodId === 'method_wallet') {
+          newBalance = Math.max(0, liveWalletBalance - amount);
+          setLiveWalletBalance(newBalance);
+          localStorage.setItem('gpay_live_balance', newBalance.toString());
+          
+          if (currentUser) {
+            updatePaymentMethodBalanceInCloud(currentUser.uid, 'method_wallet', newBalance).catch(console.error);
+          }
+        } else {
+          newBalance = Math.max(0, (methodSelected.balance ?? 0) - amount);
+          updatedMethods = paymentMethods.map(m => {
+            if (m.id === methodId) {
+              return { ...m, balance: newBalance };
+            }
+            return m;
+          });
+          setPaymentMethods(updatedMethods);
+          
+          if (currentUser) {
+            if (status === 'success') {
+              updatePaymentMethodBalanceInCloud(currentUser.uid, methodId, newBalance).catch(console.error);
+            }
+          } else {
+            localStorage.setItem('gpay_methods', JSON.stringify(updatedMethods));
+          }
         }
-        return m;
-      });
-      setPaymentMethods(updatedMethods);
-      
-      if (currentUser) {
-        if (status === 'success') {
-          updatePaymentMethodBalanceInCloud(currentUser.uid, methodId, newBalance).catch(console.error);
-        }
-      } else {
-        localStorage.setItem('gpay_methods', JSON.stringify(updatedMethods));
       }
-    }
 
     // 2. Generate Transaction row
     const newTx: Transaction = {
@@ -477,10 +722,13 @@ export default function App() {
       protocol,
       status,
       paymentMethodId: methodId,
-      paymentMethodName: methodSelected ? methodSelected.name : 'GPay Wallet',
+      paymentMethodName: methodSelected ? methodSelected.name : 'PayG Wallet',
       category: contact.isMerchant ? 'Shopping & Utilities' : 'Friends',
       note: note || undefined,
       userId: currentUser ? currentUser.uid : 'user_current',
+      mode: extraDetails.mode || 'sale',
+      approvalCode: extraDetails.approvalCode || `AP_GPAY_${Math.floor(Math.random() * 900000 + 100000)}`,
+      isCaptured: extraDetails.isCaptured !== undefined ? extraDetails.isCaptured : true,
       protocolDetails: extraDetails
     };
 
@@ -502,11 +750,45 @@ export default function App() {
 
     setIsPaymentModalOpen(false);
     triggerToast(
-      status === 'pending_sync'
-        ? `Offline payment of $${amount.toFixed(2)} cached! Sync pending.`
-        : `Payment of $${amount.toFixed(2)} settled with ${contact.name}!`,
+      extraDetails.mode === 'pre_auth'
+        ? `Pre-Authorization hold of $${amount.toFixed(2)} generated successfully!`
+        : status === 'pending_sync'
+          ? `Offline payment of $${amount.toFixed(2)} cached! Sync pending.`
+          : `Payment of $${amount.toFixed(2)} settled with ${contact.name}!`,
       status === 'pending_sync' ? 'warning' : 'success'
     );
+  };
+
+  // --- CAPTURE PRE-AUTH TRANSACTION ---
+  const handleCaptureTransaction = async (txId: string) => {
+    const updatedTx = transactions.map(tx => {
+      if (tx.id === txId) {
+        addProtocolLog(
+          `Captured Authorization: ${tx.approvalCode}`,
+          JSON.stringify({
+            status: "CAPTURED",
+            original_amount: tx.amount,
+            captured_amount: tx.amount,
+            approval_code: tx.approvalCode,
+            clearing_ledger: "SUCCESSFUL_SETTLEMENT"
+          }, null, 2),
+          'success',
+          tx.protocol === 'offline_201_3' ? '201.3' : '101.1'
+        );
+        return { ...tx, isCaptured: true };
+      }
+      return tx;
+    });
+    setTransactions(updatedTx);
+    if (currentUser) {
+      const captured = updatedTx.find(t => t.id === txId);
+      if (captured) {
+        addTransactionToCloud(currentUser.uid, captured).catch(console.error);
+      }
+    } else {
+      localStorage.setItem('gpay_transactions', JSON.stringify(updatedTx));
+    }
+    triggerToast("Authorization captured successfully! Funds settled.", "success");
   };
 
   // --- FORCE OUTBOX CLEAR & SYNC ---
@@ -628,13 +910,37 @@ export default function App() {
         
         {/* 2. Wallet & Balances Card Carousel */}
         <WalletSection
-          paymentMethods={paymentMethods}
+          paymentMethods={activePaymentMethods}
           onAddMethod={handleAddPaymentMethod}
           onTopUpWallet={handleTopUpWallet}
+          isLiveMode={isLiveMode}
+          onToggleLiveMode={handleToggleLiveMode}
+          liveWalletBalance={liveWalletBalance}
         />
 
         {/* 3. Quick Round Actions */}
         <QuickActions onAction={handleQuickAction} />
+
+        {/* PayG Multi-Route Clearing Engine */}
+        <CardTransferEngine
+          paymentMethods={activePaymentMethods}
+          onAddTransaction={handlePaymentComplete}
+          onAddLog={addProtocolLog}
+          triggerToast={triggerToast}
+          isOnline={isOnline}
+        />
+
+        {/* 3b. Real-time Multi-Mode Secure Payment Terminal */}
+        <PaymentTerminal
+          paymentMethods={activePaymentMethods}
+          transactions={transactions}
+          onAddTransaction={handlePaymentComplete}
+          onCaptureTransaction={handleCaptureTransaction}
+          onAddLog={addProtocolLog}
+          triggerToast={triggerToast}
+          isOnline={isOnline}
+          contacts={contacts}
+        />
 
         {/* 4. Friends and Businesses Grid */}
         <ContactsGrid
@@ -656,15 +962,20 @@ export default function App() {
           isOnline={isOnline}
         />
 
+        {/* 5b. Interactive Cryptographic Signature & Verification Pipeline Visualizer */}
+        <section className="px-4 py-1 max-w-4xl mx-auto font-sans">
+          <ProtocolPipelineVisualizer transactions={transactions} />
+        </section>
+
         {/* 6. Transaction Ledger History list */}
-        <TransactionHistory transactions={transactions} />
+        <TransactionHistory transactions={transactions} onCapture={handleCaptureTransaction} />
 
       </main>
 
       {/* --- FOOTER DECORATION --- */}
       <footer className="border-t border-slate-900 mt-8 pt-6 pb-2 text-center text-slate-600 max-w-4xl mx-auto w-full px-4 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
         <p className="text-[11px] font-mono leading-none">
-          GPay sandbox build v201.3.1 • Safe cryptographies ECDSA-P256
+          PayG sandbox build v201.3.1 • Safe cryptographies ECDSA-P256
         </p>
         <p className="text-[11px] flex items-center justify-center gap-1">
           <Shield size={12} className="text-blue-500" />
@@ -696,12 +1007,13 @@ export default function App() {
           setSelectedContact(null);
         }}
         contacts={contacts}
-        paymentMethods={paymentMethods}
+        paymentMethods={activePaymentMethods}
         selectedContact={selectedContact}
         isOnline={isOnline}
         onPaymentComplete={handlePaymentComplete}
         onAddLog={addProtocolLog}
         offlineSequence={offlineSequence}
+        isLiveMode={isLiveMode}
       />
 
       {/* --- PROTOCOL HELP REFERENCE --- */}
@@ -709,6 +1021,16 @@ export default function App() {
         isOpen={isHelpModalOpen}
         onClose={() => setIsHelpModalOpen(false)}
       />
+
+      {/* --- CLOUD SIGN-IN ERROR HANDLERS --- */}
+      {authErrorModal && (
+        <AuthErrorModal
+          isOpen={authErrorModal.isOpen}
+          type={authErrorModal.type}
+          message={authErrorModal.message}
+          onClose={() => setAuthErrorModal(null)}
+        />
+      )}
 
     </div>
   );

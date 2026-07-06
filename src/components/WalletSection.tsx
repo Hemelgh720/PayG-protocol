@@ -1,25 +1,135 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { CreditCard, Landmark, Plus, ArrowUpRight, DollarSign, Wallet, ShieldAlert, Sparkles, X, Check } from 'lucide-react';
 import { PaymentMethod } from '../types';
+import { motion, AnimatePresence } from 'motion/react';
+
+interface AnimatedBalanceProps {
+  value: number;
+}
+
+function AnimatedBalance({ value }: AnimatedBalanceProps) {
+  const [displayValue, setDisplayValue] = useState(value);
+  const previousValueRef = useRef(value);
+  const [balanceChange, setBalanceChange] = useState<{ amount: number; type: 'gain' | 'loss' } | null>(null);
+  const [triggerFlash, setTriggerFlash] = useState(false);
+
+  useEffect(() => {
+    const startVal = previousValueRef.current;
+    const endVal = value;
+    
+    if (startVal === endVal) return;
+
+    // Detect positive/negative change
+    const diff = endVal - startVal;
+    setBalanceChange({
+      amount: Math.abs(diff),
+      type: diff > 0 ? 'gain' : 'loss'
+    });
+    setTriggerFlash(true);
+
+    // Clear floating badge & flash after animation
+    const timer = setTimeout(() => {
+      setBalanceChange(null);
+      setTriggerFlash(false);
+    }, 2000);
+
+    // Animate displayValue
+    const duration = 850; // ms
+    const startTime = performance.now();
+
+    let animationFrameId: number;
+
+    const updateCounter = (currentTime: number) => {
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      
+      // Ease out quad formula
+      const easeProgress = progress * (2 - progress);
+      const currentVal = startVal + (endVal - startVal) * easeProgress;
+      
+      setDisplayValue(currentVal);
+
+      if (progress < 1) {
+        animationFrameId = requestAnimationFrame(updateCounter);
+      } else {
+        setDisplayValue(endVal);
+        previousValueRef.current = endVal;
+      }
+    };
+
+    animationFrameId = requestAnimationFrame(updateCounter);
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+      clearTimeout(timer);
+    };
+  }, [value]);
+
+  return (
+    <div className="relative flex items-baseline">
+      {/* Floating Gain/Loss Badge */}
+      <AnimatePresence>
+        {balanceChange && (
+          <motion.div
+            initial={{ opacity: 0, y: 15, scale: 0.8 }}
+            animate={{ opacity: 1, y: -28, scale: 1 }}
+            exit={{ opacity: 0, y: -50, scale: 0.9 }}
+            transition={{ duration: 0.8, ease: "easeOut" }}
+            className={`absolute -top-1.5 right-0 text-[11px] font-bold font-mono px-2 py-0.5 rounded-full border shadow-sm pointer-events-none z-30 ${
+              balanceChange.type === 'gain'
+                ? 'bg-emerald-950/95 text-emerald-400 border-emerald-500/40 shadow-emerald-900/20'
+                : 'bg-rose-950/95 text-rose-400 border-rose-500/40 shadow-rose-900/20'
+            }`}
+          >
+            {balanceChange.type === 'gain' ? '▲ +' : '▼ -'}${balanceChange.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <motion.div
+        animate={triggerFlash ? {
+          scale: [1, 1.08, 1],
+          textShadow: balanceChange?.type === 'gain' 
+            ? ["0 0 0px rgba(16,185,129,0)", "0 0 16px rgba(16,185,129,0.6)", "0 0 0px rgba(16,185,129,0)"]
+            : ["0 0 0px rgba(244,63,94,0)", "0 0 16px rgba(244,63,94,0.6)", "0 0 0px rgba(244,63,94,0)"]
+        } : {}}
+        transition={{ duration: 0.7 }}
+        className="text-3xl font-bold text-white tracking-tight flex items-baseline"
+      >
+        <span className="text-xl font-medium text-slate-400 mr-1">$</span>
+        <span>
+          {displayValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </span>
+      </motion.div>
+    </div>
+  );
+}
 
 interface WalletSectionProps {
   paymentMethods: PaymentMethod[];
   onAddMethod: (method: Omit<PaymentMethod, 'id'>) => void;
   onTopUpWallet: (amount: number, bankMethodId: string) => boolean | Promise<boolean>;
+  isLiveMode: boolean;
+  onToggleLiveMode: (live: boolean) => void;
+  liveWalletBalance: number;
 }
 
 export default function WalletSection({
   paymentMethods,
   onAddMethod,
-  onTopUpWallet
+  onTopUpWallet,
+  isLiveMode,
+  onToggleLiveMode,
+  liveWalletBalance
 }: WalletSectionProps) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showTopUpModal, setShowTopUpModal] = useState(false);
   
   // Add Method State
-  const [methodType, setMethodType] = useState<'bank_account' | 'credit_card'>('bank_account');
-  const [name, setName] = useState('');
-  const [provider, setProvider] = useState('');
+  const [methodType, setMethodType] = useState<'bank_account' | 'credit_card' | 'debit_card'>('credit_card');
+  const [activeSelection, setActiveSelection] = useState<'visa_debit' | 'visa_credit' | 'master_debit' | 'master_credit' | 'bank_account'>('visa_credit');
+  const [name, setName] = useState('Visa Credit Card');
+  const [provider, setProvider] = useState('Visa');
   const [number, setNumber] = useState('');
   const [initialBalance, setInitialBalance] = useState('1000');
   
@@ -29,7 +139,7 @@ export default function WalletSection({
 
   // Find GPay Wallet balance
   const wallet = paymentMethods.find(m => m.type === 'wallet');
-  const walletBalance = wallet?.balance ?? 0;
+  const walletBalance = isLiveMode ? liveWalletBalance : (wallet?.balance ?? 0);
 
   // Filter bank methods for topping up
   const bankMethods = paymentMethods.filter(m => m.type === 'bank_account');
@@ -43,7 +153,7 @@ export default function WalletSection({
       name,
       provider,
       number: methodType === 'bank_account' ? `•••• ${number.slice(-4)}` : `•••• •••• •••• ${number.slice(-4)}`,
-      balance: methodType === 'bank_account' ? parseFloat(initialBalance) || 0 : undefined
+      balance: parseFloat(initialBalance) || 0
     });
 
     // Reset fields
@@ -71,43 +181,76 @@ export default function WalletSection({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         
         {/* Wallet Balance Card */}
-        <div className="bg-slate-800 border border-slate-700/60 rounded-3xl p-5 flex flex-col justify-between shadow-xl relative overflow-hidden group min-h-[170px]">
-          <div className="absolute right-[-20px] bottom-[-20px] w-36 h-36 rounded-full bg-gradient-to-tr from-blue-600/10 to-teal-500/10 blur-xl pointer-events-none group-hover:scale-125 transition-all duration-700"></div>
+        <div className={`border rounded-3xl p-5 flex flex-col justify-between shadow-xl relative overflow-hidden group min-h-[170px] transition-all duration-500 ${
+          isLiveMode 
+            ? 'bg-gradient-to-br from-slate-900 via-slate-950/90 to-emerald-950/40 border-emerald-500/40 shadow-[0_0_20px_rgba(16,185,129,0.15)]' 
+            : 'bg-slate-800 border-slate-700/60'
+        }`}>
+          {isLiveMode ? (
+            <div className="absolute right-[-20px] bottom-[-20px] w-36 h-36 rounded-full bg-gradient-to-tr from-emerald-500/15 to-blue-500/15 blur-xl pointer-events-none group-hover:scale-125 transition-all duration-700"></div>
+          ) : (
+            <div className="absolute right-[-20px] bottom-[-20px] w-36 h-36 rounded-full bg-gradient-to-tr from-blue-600/10 to-teal-500/10 blur-xl pointer-events-none group-hover:scale-125 transition-all duration-700"></div>
+          )}
           
           <div className="flex items-center justify-between z-10">
             <div className="flex items-center space-x-2">
-              <div className="p-2 bg-gradient-to-br from-blue-500/15 to-teal-500/15 border border-blue-500/20 text-blue-400 rounded-xl">
+              <div className={`p-2 border rounded-xl transition-all duration-300 ${
+                isLiveMode 
+                  ? 'bg-gradient-to-br from-emerald-500/20 to-teal-500/20 border-emerald-500/30 text-emerald-400' 
+                  : 'bg-gradient-to-br from-blue-500/15 to-teal-500/15 border-blue-500/20 text-blue-400'
+              }`}>
                 <Wallet size={18} />
               </div>
-              <span className="text-sm font-medium text-slate-300">GPay Secure Balance</span>
+              <span className="text-sm font-medium text-slate-300">PayG Secure Balance</span>
             </div>
-            <div className="flex items-center space-x-1 text-xs bg-slate-700/50 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-500/20">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span className="font-mono text-[10px]">VAULT_SECURE</span>
-            </div>
+            
+            <button
+              id="env-toggle-pill"
+              onClick={() => onToggleLiveMode(!isLiveMode)}
+              className={`flex items-center space-x-1.5 text-xs px-2.5 py-1 rounded-full border transition-all duration-300 active:scale-95 ${
+                isLiveMode 
+                  ? 'bg-emerald-950 text-emerald-300 border-emerald-500/50 hover:bg-emerald-900/60 shadow-[0_0_10px_rgba(16,185,129,0.2)] font-bold'
+                  : 'bg-slate-700/60 text-slate-300 border-slate-600 hover:bg-slate-750 font-semibold'
+              }`}
+              title="Click to toggle between Demo (Sandbox) and Live (Production Enclave) mode"
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${isLiveMode ? 'bg-emerald-400 animate-pulse' : 'bg-slate-400'}`}></span>
+              <span className="font-mono text-[9px] tracking-wider">{isLiveMode ? 'LIVE MODE' : 'DEMO MODE'}</span>
+            </button>
           </div>
 
           <div className="my-3 z-10">
-            <div className="text-3xl font-bold text-white tracking-tight flex items-baseline">
-              <span className="text-xl font-medium text-slate-400 mr-1">$</span>
-              {walletBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </div>
-            <p className="text-xs text-slate-400 mt-1">Simulated balance backed by FDIC vault</p>
+            <AnimatedBalance value={walletBalance} />
+            <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
+              {isLiveMode ? (
+                <>
+                  <Sparkles size={11} className="text-emerald-400 shrink-0" />
+                  <span>CloudHSM & Enclave secured</span>
+                </>
+              ) : (
+                <span>Simulated balance backed by FDIC vault</span>
+              )}
+            </p>
           </div>
 
           <div className="z-10 flex space-x-2">
             <button
               id="topup-trigger-btn"
               onClick={() => {
-                if (bankMethods.length > 0) {
-                  setSelectedBankId(bankMethods[0].id);
+                const sourceMethods = paymentMethods.filter(m => m.type !== 'wallet');
+                if (sourceMethods.length > 0) {
+                  setSelectedBankId(sourceMethods[0].id);
                 }
                 setShowTopUpModal(true);
               }}
-              className="flex-1 flex items-center justify-center space-x-1 bg-gradient-to-r from-blue-600 to-teal-600 hover:from-blue-500 hover:to-teal-500 text-white py-2 px-3 rounded-xl text-xs font-semibold transition-all shadow-md active:scale-[0.98]"
+              className={`flex-1 flex items-center justify-center space-x-1 py-2 px-3 rounded-xl text-xs font-semibold transition-all shadow-md active:scale-[0.98] ${
+                isLiveMode
+                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-900/10'
+                  : 'bg-gradient-to-r from-blue-600 to-teal-600 hover:from-blue-500 hover:to-teal-500 text-white'
+              }`}
             >
               <ArrowUpRight size={14} />
-              <span>Load Cash</span>
+              <span>{isLiveMode ? 'Load Live Cash' : 'Load Cash'}</span>
             </button>
           </div>
         </div>
@@ -185,49 +328,107 @@ export default function WalletSection({
 
             <form onSubmit={handleAddSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1.5">Account / Method Type</label>
-                <div className="grid grid-cols-2 gap-2">
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">Select Card or Bank Account Type</label>
+                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
                   <button
-                    id="select-type-bank"
+                    id="preset-visa-credit"
                     type="button"
                     onClick={() => {
-                      setMethodType('bank_account');
-                      setProvider('Chase Bank');
-                    }}
-                    className={`py-2 px-3 rounded-xl border text-xs font-semibold transition-all flex items-center justify-center space-x-1.5 ${
-                      methodType === 'bank_account'
-                        ? 'bg-blue-950 border-blue-500 text-blue-300'
-                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-750'
-                    }`}
-                  >
-                    <Landmark size={13} />
-                    <span>Bank Account</span>
-                  </button>
-                  <button
-                    id="select-type-card"
-                    type="button"
-                    onClick={() => {
+                      setActiveSelection('visa_credit');
                       setMethodType('credit_card');
                       setProvider('Visa');
+                      setName('Visa Credit Card');
                     }}
-                    className={`py-2 px-3 rounded-xl border text-xs font-semibold transition-all flex items-center justify-center space-x-1.5 ${
-                      methodType === 'credit_card'
-                        ? 'bg-blue-950 border-blue-500 text-blue-300'
+                    className={`py-2 px-2.5 rounded-xl border text-[11px] font-semibold transition-all flex flex-col items-center justify-center text-center leading-tight ${
+                      activeSelection === 'visa_credit'
+                        ? 'bg-blue-950 border-blue-500 text-blue-300 shadow-md'
                         : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-750'
                     }`}
                   >
-                    <CreditCard size={13} />
-                    <span>Credit Card</span>
+                    <CreditCard size={14} className="mb-1 text-blue-400" />
+                    <span>Visa Credit</span>
+                  </button>
+                  <button
+                    id="preset-visa-debit"
+                    type="button"
+                    onClick={() => {
+                      setActiveSelection('visa_debit');
+                      setMethodType('debit_card');
+                      setProvider('Visa');
+                      setName('Visa Debit Card');
+                    }}
+                    className={`py-2 px-2.5 rounded-xl border text-[11px] font-semibold transition-all flex flex-col items-center justify-center text-center leading-tight ${
+                      activeSelection === 'visa_debit'
+                        ? 'bg-blue-950 border-blue-500 text-blue-300 shadow-md'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-750'
+                    }`}
+                  >
+                    <CreditCard size={14} className="mb-1 text-teal-400" />
+                    <span>Visa Debit</span>
+                  </button>
+                  <button
+                    id="preset-master-credit"
+                    type="button"
+                    onClick={() => {
+                      setActiveSelection('master_credit');
+                      setMethodType('credit_card');
+                      setProvider('Mastercard');
+                      setName('Mastercard Credit Card');
+                    }}
+                    className={`py-2 px-2.5 rounded-xl border text-[11px] font-semibold transition-all flex flex-col items-center justify-center text-center leading-tight ${
+                      activeSelection === 'master_credit'
+                        ? 'bg-blue-950 border-blue-500 text-blue-300 shadow-md'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-750'
+                    }`}
+                  >
+                    <CreditCard size={14} className="mb-1 text-amber-500" />
+                    <span>Mastercard Credit</span>
+                  </button>
+                  <button
+                    id="preset-master-debit"
+                    type="button"
+                    onClick={() => {
+                      setActiveSelection('master_debit');
+                      setMethodType('debit_card');
+                      setProvider('Mastercard');
+                      setName('Mastercard Debit Card');
+                    }}
+                    className={`py-2 px-2.5 rounded-xl border text-[11px] font-semibold transition-all flex flex-col items-center justify-center text-center leading-tight ${
+                      activeSelection === 'master_debit'
+                        ? 'bg-blue-950 border-blue-500 text-blue-300 shadow-md'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-750'
+                    }`}
+                  >
+                    <CreditCard size={14} className="mb-1 text-orange-400" />
+                    <span>Mastercard Debit</span>
+                  </button>
+                  <button
+                    id="preset-bank-account"
+                    type="button"
+                    onClick={() => {
+                      setActiveSelection('bank_account');
+                      setMethodType('bank_account');
+                      setProvider('Chase Bank');
+                      setName('Chase Checking');
+                    }}
+                    className={`py-2 px-2.5 rounded-xl border text-[11px] font-semibold transition-all flex flex-col items-center justify-center text-center leading-tight col-span-2 sm:col-span-1 ${
+                      activeSelection === 'bank_account'
+                        ? 'bg-blue-950 border-blue-500 text-blue-300 shadow-md'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-750'
+                    }`}
+                  >
+                    <Landmark size={14} className="mb-1 text-emerald-400" />
+                    <span>Bank Transfer</span>
                   </button>
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Friendly Name</label>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Friendly Account/Card Name</label>
                 <input
                   id="add-method-name"
                   type="text"
-                  placeholder={methodType === 'bank_account' ? "Chase Checking, Wells Fargo Savings" : "Visa Gold Card"}
+                  placeholder="e.g. My Primary Card, Chase Checking"
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -237,7 +438,7 @@ export default function WalletSection({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Provider Network</label>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Provider Network / Bank</label>
                   <select
                     id="add-method-provider"
                     value={provider}
@@ -279,20 +480,20 @@ export default function WalletSection({
                 </div>
               </div>
 
-              {methodType === 'bank_account' && (
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">Simulated Starting Balance ($)</label>
-                  <input
-                    id="add-method-balance"
-                    type="number"
-                    min="0"
-                    placeholder="1000"
-                    value={initialBalance}
-                    onChange={(e) => setInitialBalance(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-850 border border-slate-700 rounded-xl text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
-              )}
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">
+                  {methodType === 'bank_account' ? 'Simulated Starting Balance ($)' : 'Simulated Credit Limit / Balance ($)'}
+                </label>
+                <input
+                  id="add-method-balance"
+                  type="number"
+                  min="0"
+                  placeholder="1000"
+                  value={initialBalance}
+                  onChange={(e) => setInitialBalance(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-850 border border-slate-700 rounded-xl text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
 
               <button
                 id="add-method-submit-btn"
@@ -325,10 +526,10 @@ export default function WalletSection({
               </button>
             </div>
 
-            {bankMethods.length === 0 ? (
+            {paymentMethods.filter(m => m.type !== 'wallet').length === 0 ? (
               <div className="text-center py-6 space-y-3">
                 <ShieldAlert className="mx-auto text-amber-500" size={32} />
-                <p className="text-sm text-slate-300">You must link a Bank Account first to load cash into your wallet.</p>
+                <p className="text-sm text-slate-300">You must link a Bank Account or Credit/Debit Card first to load cash into your wallet.</p>
                 <button
                   id="topup-go-link-btn"
                   onClick={() => {
@@ -337,22 +538,22 @@ export default function WalletSection({
                   }}
                   className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-blue-400 text-xs font-semibold rounded-xl border border-slate-750 transition-all"
                 >
-                  Link Bank Account Now
+                  Link Payment Method Now
                 </button>
               </div>
             ) : (
               <form onSubmit={handleTopUpSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1.5">Source Bank Account</label>
+                  <label className="block text-xs font-medium text-slate-400 mb-1.5">Source Bank Account or Card</label>
                   <select
                     id="topup-source-select"
                     value={selectedBankId}
                     onChange={(e) => setSelectedBankId(e.target.value)}
                     className="w-full px-3 py-2.5 bg-slate-850 border border-slate-700 rounded-xl text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   >
-                    {bankMethods.map(b => (
-                      <option key={b.id} value={b.id}>
-                        {b.name} ({b.provider} • Bal: ${b.balance?.toFixed(2)})
+                    {paymentMethods.filter(m => m.type !== 'wallet').map(m => (
+                      <option key={m.id} value={m.id}>
+                        [{m.type === 'bank_account' ? 'Bank' : 'Card'}] {m.name} ({m.provider} • Bal/Limit: ${m.balance?.toFixed(2)})
                       </option>
                     ))}
                   </select>
@@ -374,7 +575,7 @@ export default function WalletSection({
                     />
                   </div>
                   <p className="text-[10px] text-slate-400 mt-1">
-                    Funds will be instantly cleared and transferred into GPay balance.
+                    Funds will be instantly cleared and transferred into PayG balance.
                   </p>
                 </div>
 

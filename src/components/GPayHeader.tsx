@@ -37,11 +37,11 @@ export default function GPayHeader({
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 via-emerald-500 to-amber-500 flex items-center justify-center shadow-lg">
-              <span className="font-bold text-lg text-white">G</span>
+              <span className="font-bold text-lg text-white">P</span>
             </div>
             <div>
               <h1 className="font-semibold text-lg leading-none tracking-tight flex items-center gap-1.5">
-                GPay <span className="text-xs font-mono bg-blue-900/60 text-blue-300 px-1.5 py-0.5 rounded border border-blue-700/50">Proto</span>
+                PayG <span className="text-xs font-mono bg-blue-900/60 text-blue-300 px-1.5 py-0.5 rounded border border-blue-700/50">Proto</span>
               </h1>
               <p className="text-xs text-slate-400">Payment Gateway Sandbox</p>
             </div>

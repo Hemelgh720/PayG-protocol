@@ -27,6 +27,9 @@ export interface Transaction {
   category: string;
   note?: string;
   userId?: string;
+  mode?: 'sale' | 'pre_auth' | 'bank_transfer';
+  approvalCode?: string;
+  isCaptured?: boolean;
   protocolDetails: {
     handshakeLatency?: number; // ms
     signature: string;

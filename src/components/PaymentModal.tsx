@@ -13,6 +13,7 @@ interface PaymentModalProps {
   onPaymentComplete: (amount: number, contact: Contact, methodId: string, protocol: ProtocolType, note: string, extraDetails: any, status: 'success' | 'pending_sync') => void;
   onAddLog: (step: string, payload: string, type: 'info' | 'success' | 'warning' | 'crypto', protocol: '101.1' | '201.3') => void;
   offlineSequence: number;
+  isLiveMode?: boolean;
 }
 
 export default function PaymentModal({
@@ -24,7 +25,8 @@ export default function PaymentModal({
   isOnline,
   onPaymentComplete,
   onAddLog,
-  offlineSequence
+  offlineSequence,
+  isLiveMode = false
 }: PaymentModalProps) {
   // Navigation inside payment modal
   const [step, setStep] = useState<'qr_scan' | 'form' | 'processing' | 'success'>('form');
@@ -32,6 +34,19 @@ export default function PaymentModal({
   const [amount, setAmount] = useState('15.50');
   const [note, setNote] = useState('');
   const [selectedMethodId, setSelectedMethodId] = useState('');
+  const [txMode, setTxMode] = useState<'sale' | 'pre_auth' | 'bank_transfer'>('sale');
+  
+  // Auto-set txMode based on selected payment method
+  useEffect(() => {
+    const selectedMethod = paymentMethods.find(m => m.id === selectedMethodId);
+    if (selectedMethod) {
+      if (selectedMethod.type === 'bank_account') {
+        setTxMode('bank_transfer');
+      } else if (txMode === 'bank_transfer') {
+        setTxMode('sale');
+      }
+    }
+  }, [selectedMethodId, paymentMethods]);
   
   // Custom camera scanner simulation
   const [scannerLaserY, setScannerLaserY] = useState(0);
@@ -161,6 +176,10 @@ export default function PaymentModal({
     const methodSelected = paymentMethods.find(m => m.id === selectedMethodId);
     if (!methodSelected) return;
 
+    // Generate custom Approval Code based on transaction mode
+    const approvalCodePrefix = txMode === 'sale' ? 'AP_SL' : txMode === 'pre_auth' ? 'AP_PA' : 'AP_BK';
+    const generatedApprovalCode = `${approvalCodePrefix}_${Math.floor(Math.random() * 900000 + 100000)}`;
+
     // Determine the protocol to run based on current network mode
     const isOfflineMode = !isOnline;
     const protocolType: ProtocolType = isOfflineMode ? 'offline_201_3' : 'online_101_1';
@@ -172,15 +191,28 @@ export default function PaymentModal({
     if (protocolType === 'online_101_1') {
       // ONLINE 101.1
       setProgressLog([
-        { label: 'Initializing Secure Session (Phase 1)...', done: false },
-        { label: 'Receiving Cryptographic challenge seed (Phase 2)...', done: false },
-        { label: 'Solving ECDSA challenge & signing payload (Phase 3)...', done: false },
-        { label: 'Clearing ledger with central payment gateway (Phase 4)...', done: false }
+        { label: isLiveMode ? 'Initializing CloudHSM Enclave Session (Phase 1)...' : 'Initializing Secure Session (Phase 1)...', done: false },
+        { label: isLiveMode ? 'Requesting Live ECDSA Challenge Token (Phase 2)...' : 'Receiving Cryptographic challenge seed (Phase 2)...', done: false },
+        { label: isLiveMode ? 'Signing payload with hardware production key (Phase 3)...' : 'Solving ECDSA challenge & signing payload (Phase 3)...', done: false },
+        { label: isLiveMode ? `Settle ledger on Production Gateway Ref: ${generatedApprovalCode} (Phase 4)...` : `Settling ledger with Gateway Approval: ${generatedApprovalCode} (Phase 4)...`, done: false }
       ]);
 
       try {
         // Log start
-        onAddLog("Starting 101.1 Payment Sequence", "Payment amount: $" + amount, "info", "101.1");
+        onAddLog(
+          isLiveMode ? "[LIVE MODE] Starting 101.1 Production Clearing" : "Starting 101.1 Payment Sequence",
+          isLiveMode 
+            ? `Production payload: $${amount} | Signing Enclave: CloudHSM Slots [1,2] | Auth: RSA/ECDSA Dual-Signed`
+            : `Payment amount: $${amount} | Mode: ${txMode.toUpperCase()}`,
+          "info",
+          "101.1"
+        );
+        onAddLog(
+          isLiveMode ? "[LIVE MODE] Production Mode Authorized" : "Payment Sandbox Mode Selected",
+          `Mode: ${txMode.toUpperCase()} | Assigned Approval Code: ${generatedApprovalCode} | Environment: PRODUCTION_LIVE`,
+          "info",
+          "101.1"
+        );
         
         // Phase 1
         await new Promise(r => setTimeout(r, 600));
@@ -207,7 +239,7 @@ export default function PaymentModal({
 
         // Phase 4
         await new Promise(r => setTimeout(r, 600));
-        setProgressLog(prev => prev.map((item, idx) => idx === 3 ? { ...item, done: true, extra: ` cleared in ${cryptoDetails.latency}ms` } : item));
+        setProgressLog(prev => prev.map((item, idx) => idx === 3 ? { ...item, done: true, extra: `${generatedApprovalCode} cleared` } : item));
 
         // Play positive sound chime
         playChime('online');
@@ -223,7 +255,10 @@ export default function PaymentModal({
             handshakeLatency: cryptoDetails.latency,
             signature: cryptoDetails.signature,
             tokenSeed: cryptoDetails.seed,
-            deviceFingerprint: cryptoDetails.fingerprint
+            deviceFingerprint: cryptoDetails.fingerprint,
+            mode: txMode,
+            approvalCode: generatedApprovalCode,
+            isCaptured: txMode !== 'pre_auth'
           },
           'success'
         );
@@ -238,12 +273,13 @@ export default function PaymentModal({
       setProgressLog([
         { label: 'Triage local network connectivity (Offline mode)...', done: false },
         { label: 'Accessing secure enclave key to sign offline bundle...', done: false },
-        { label: 'Generating compressed TOTP-201.3 payload token...', done: false },
+        { label: `Assembling compressed token with code: ${generatedApprovalCode}...`, done: false },
         { label: 'Broadcasting Acoustic Sound Wave payload (19kHz)...', done: false }
       ]);
 
       try {
-        onAddLog("Starting 201.3 Offline Payment Sequence", "Payment amount: $" + amount, "info", "201.3");
+        onAddLog("Starting 201.3 Offline Payment Sequence", `Payment amount: $${amount} | Mode: ${txMode.toUpperCase()}`, "info", "201.3");
+        onAddLog("Payment Sandbox Mode Selected", `Offline Mode: ${txMode.toUpperCase()} | Assigned Approval Code: ${generatedApprovalCode}`, "info", "201.3");
         
         // Phase 1
         await new Promise(r => setTimeout(r, 600));
@@ -269,7 +305,7 @@ export default function PaymentModal({
         // Phase 3
         await new Promise(r => setTimeout(r, 600));
         setActiveStepIndex(3);
-        setProgressLog(prev => prev.map((item, idx) => idx === 2 ? { ...item, done: true, extra: `Size: ${offlineData.payloadSize} bytes` } : item));
+        setProgressLog(prev => prev.map((item, idx) => idx === 2 ? { ...item, done: true, extra: `${generatedApprovalCode}` } : item));
 
         // Phase 4
         // Sound pulse simulation
@@ -289,7 +325,10 @@ export default function PaymentModal({
             signature: offlineData.signature,
             offlineAuthCode: offlineData.authCode,
             payloadSize: offlineData.payloadSize,
-            sequence: offlineSequence
+            sequence: offlineSequence,
+            mode: txMode,
+            approvalCode: generatedApprovalCode,
+            isCaptured: txMode !== 'pre_auth'
           },
           'pending_sync'
         );
@@ -386,6 +425,12 @@ export default function PaymentModal({
 
         {step === 'form' && recipient && (
           <div className="p-6 space-y-4">
+            {isLiveMode && (
+              <div className="bg-emerald-950/40 border border-emerald-500/30 text-emerald-400 text-[10px] uppercase font-bold tracking-widest px-3 py-1.5 rounded-xl text-center flex items-center justify-center space-x-1.5 animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span>PRODUCTION GATEWAY ACTIVE • HSM ENCLAVE ENGAGED</span>
+              </div>
+            )}
             
             {/* Recipient Card */}
             <div className="flex items-center justify-between bg-slate-850/80 border border-slate-800 p-3.5 rounded-2xl">
@@ -458,6 +503,57 @@ export default function PaymentModal({
                   className="w-full pl-9 pr-4 py-3 bg-slate-850 border border-slate-700 rounded-2xl text-2xl font-bold text-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
                 />
               </div>
+            </div>
+
+            {/* Transaction Authorization Mode Selector */}
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">Gateway Transaction Mode</label>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  id="tx-mode-sale-btn"
+                  type="button"
+                  onClick={() => setTxMode('sale')}
+                  className={`py-2 px-1 rounded-xl border text-[11px] font-semibold transition-all flex flex-col items-center justify-center text-center leading-tight ${
+                    txMode === 'sale'
+                      ? 'bg-blue-950 border-blue-500 text-blue-300 shadow-md'
+                      : 'bg-slate-800/40 border-slate-800 text-slate-400 hover:bg-slate-800'
+                  }`}
+                >
+                  <RefreshCcw size={13} className="mb-1 text-teal-400" />
+                  <span>Direct Sale</span>
+                </button>
+                <button
+                  id="tx-mode-preauth-btn"
+                  type="button"
+                  onClick={() => setTxMode('pre_auth')}
+                  className={`py-2 px-1 rounded-xl border text-[11px] font-semibold transition-all flex flex-col items-center justify-center text-center leading-tight ${
+                    txMode === 'pre_auth'
+                      ? 'bg-blue-950 border-blue-500 text-blue-300 shadow-md'
+                      : 'bg-slate-800/40 border-slate-800 text-slate-400 hover:bg-slate-800'
+                  }`}
+                >
+                  <ShieldCheck size={13} className="mb-1 text-amber-400 font-bold" />
+                  <span>Pre-Auth Hold</span>
+                </button>
+                <button
+                  id="tx-mode-bank-btn"
+                  type="button"
+                  onClick={() => setTxMode('bank_transfer')}
+                  className={`py-2 px-1 rounded-xl border text-[11px] font-semibold transition-all flex flex-col items-center justify-center text-center leading-tight ${
+                    txMode === 'bank_transfer'
+                      ? 'bg-blue-950 border-blue-500 text-blue-300 shadow-md'
+                      : 'bg-slate-800/40 border-slate-800 text-slate-400 hover:bg-slate-800'
+                  }`}
+                >
+                  <Landmark size={13} className="mb-1 text-emerald-400" />
+                  <span>Bank Transfer</span>
+                </button>
+              </div>
+              <p className="text-[9px] text-slate-500 mt-1 font-mono">
+                {txMode === 'sale' && "▶ Standard Capture: Immediate clearing upon successful cryptographic handshake."}
+                {txMode === 'pre_auth' && "▶ Hold authorization code: Escrow hold inside enclave. Requires manual Capture."}
+                {txMode === 'bank_transfer' && "▶ Direct Clearing: Clearing from bank account/card with custom ACH/Wire code."}
+              </p>
             </div>
 
             {/* Note input */}
@@ -547,14 +643,16 @@ export default function PaymentModal({
               className={`w-full py-3.5 rounded-2xl text-sm font-semibold transition-all shadow-lg active:scale-[0.98] mt-2 flex items-center justify-center space-x-1.5 ${
                 !amount || parseFloat(amount) <= 0
                   ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                  : isOnline
-                    ? 'bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white shadow-blue-900/10'
-                    : 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white shadow-amber-900/10'
+                  : isLiveMode
+                    ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-900/10'
+                    : isOnline
+                      ? 'bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white shadow-blue-900/10'
+                      : 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white shadow-amber-900/10'
               }`}
             >
               <ShieldCheck size={16} />
               <span>
-                Pay ${parseFloat(amount || '0').toFixed(2)} with{' '}
+                {isLiveMode ? 'Live Secure Pay' : 'Pay'} ${parseFloat(amount || '0').toFixed(2)} with{' '}
                 {isOnline ? 'Online 101.1' : 'Offline 201.3'}
               </span>
             </button>

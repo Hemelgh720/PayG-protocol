@@ -4,9 +4,10 @@ import { Transaction } from '../types';
 
 interface TransactionHistoryProps {
   transactions: Transaction[];
+  onCapture?: (txId: string) => void;
 }
 
-export default function TransactionHistory({ transactions }: TransactionHistoryProps) {
+export default function TransactionHistory({ transactions, onCapture }: TransactionHistoryProps) {
   const [filter, setFilter] = useState<'ALL' | 'ONLINE' | 'OFFLINE'>('ALL');
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
 
@@ -108,6 +109,25 @@ export default function TransactionHistory({ transactions }: TransactionHistoryP
                         }`}>
                           {tx.protocol === 'offline_201_3' && tx.status === 'pending_sync' ? 'Offline Cache' : 'Cleared'}
                         </span>
+
+                        {/* Transaction Mode & Hold status badges */}
+                        {tx.mode && (
+                          <span className={`text-[9px] font-mono px-1.5 py-0.2 rounded-full border ${
+                            tx.mode === 'pre_auth'
+                              ? tx.isCaptured
+                                ? 'bg-indigo-950/40 text-indigo-400 border-indigo-900/30'
+                                : 'bg-amber-950/40 text-amber-400 border-amber-900/30 animate-pulse'
+                              : tx.mode === 'bank_transfer'
+                                ? 'bg-emerald-950/40 text-emerald-400 border-emerald-900/30'
+                                : 'bg-slate-950/40 text-slate-400 border-slate-900/30'
+                          }`}>
+                            {tx.mode === 'pre_auth' 
+                              ? tx.isCaptured ? 'Pre-Auth (Captured)' : 'Pre-Auth Hold' 
+                              : tx.mode === 'bank_transfer' 
+                                ? 'Bank Transfer' 
+                                : 'Sale'}
+                          </span>
+                        )}
                       </div>
 
                       {tx.note && (
@@ -200,6 +220,25 @@ export default function TransactionHistory({ transactions }: TransactionHistoryP
                   <span className="text-slate-500">Transaction ID:</span>
                   <span className="text-slate-300 font-bold">{selectedTx.id}</span>
                 </div>
+
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Transaction Mode:</span>
+                  <span className="text-slate-300 capitalize font-bold">{selectedTx.mode || 'sale'}</span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Approval Code:</span>
+                  <span className="text-blue-400 font-bold">{selectedTx.approvalCode || `AP_GPAY_${Math.floor(Math.random() * 900000 + 100000)}`}</span>
+                </div>
+
+                {selectedTx.mode === 'pre_auth' && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Pre-Auth Status:</span>
+                    <span className={`font-bold ${selectedTx.isCaptured ? 'text-emerald-400 font-semibold' : 'text-amber-400 font-semibold animate-pulse'}`}>
+                      {selectedTx.isCaptured ? 'Captured & Settled' : 'Funds Authorized Hold'}
+                    </span>
+                  </div>
+                )}
                 
                 <div className="flex justify-between">
                   <span className="text-slate-500">Method Used:</span>
@@ -278,10 +317,26 @@ export default function TransactionHistory({ transactions }: TransactionHistoryP
                 </div>
               </div>
 
+              {/* Capture Action button for Pre-Auth holds */}
+              {selectedTx.mode === 'pre_auth' && !selectedTx.isCaptured && onCapture && (
+                <button
+                  id="capture-preauth-funds-btn"
+                  onClick={() => {
+                    onCapture(selectedTx.id);
+                    // Update state locally so modal displays the updated Captured state immediately
+                    setSelectedTx(prev => prev ? { ...prev, isCaptured: true } : null);
+                  }}
+                  className="w-full mt-4 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-slate-950 font-bold py-2.5 px-4 rounded-xl text-xs transition-all shadow-md active:scale-95 flex items-center justify-center space-x-2 border border-amber-400/20"
+                >
+                  <Shield size={13} className="text-slate-950" />
+                  <span>Capture Pre-Auth Hold (${selectedTx.amount.toFixed(2)})</span>
+                </button>
+              )}
+
               {/* Verified Badge */}
               <div className="flex items-center justify-center space-x-1 text-emerald-400 text-[10px] font-semibold mt-4 bg-emerald-950/20 py-1.5 rounded-xl border border-emerald-900/20">
                 <Shield size={12} />
-                <span>Verified Cryptographically by Central GPay Ledger</span>
+                <span>Verified Cryptographically by Central PayG Ledger</span>
               </div>
             </div>
 

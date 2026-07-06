@@ -48,7 +48,7 @@ export async function seedUserData(userId: string) {
         id: 'log_init_1',
         timestamp: new Date(Date.now() - 5000).toISOString(),
         protocol: 'SYSTEM',
-        step: 'GPay Cloud Database Sync Initialized',
+        step: 'PayG Cloud Database Sync Initialized',
         payload: JSON.stringify({
           database: "FIRESTORE_ENTERPRISE",
           region: "SECURE_GOOGLE_CLOUD",

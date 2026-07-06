@@ -34,7 +34,7 @@ export default function ProtocolHelpModal({ isOpen, onClose }: ProtocolHelpModal
           {/* Intro */}
           <div className="space-y-2">
             <p className="text-xs text-slate-300 leading-relaxed">
-              Welcome to the <strong>GPay Gateway & Protocol Sandbox</strong>. This clone represents a highly specialized deployment demonstrating how central mobile wallets perform standard payments, alongside two distinct payment clearing protocols: <strong>Online 101.1</strong> and <strong>Offline 201.3</strong>.
+              Welcome to the <strong>PayG Gateway & Protocol Sandbox</strong>. This clone represents a highly specialized deployment demonstrating how central mobile wallets perform standard payments, alongside two distinct payment clearing protocols: <strong>Online 101.1</strong> and <strong>Offline 201.3</strong>.
             </p>
           </div>
 
@@ -132,10 +132,72 @@ export default function ProtocolHelpModal({ isOpen, onClose }: ProtocolHelpModal
             </div>
           </div>
 
+          {/* APP METADATA & GITHUB ACTION DEPLOYMENT GUIDE */}
+          <div className="space-y-2">
+            <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center space-x-1.5">
+              <Layers size={14} className="text-emerald-400" />
+              <span>GPay Security Sandbox Metadata & CI/CD Deployment</span>
+            </h3>
+            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-850 text-[11px] text-slate-400 space-y-3 leading-relaxed font-mono">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[10px]">
+                <div>
+                  <span className="text-slate-500 block uppercase">Application ID:</span>
+                  <span className="text-blue-400 font-bold block select-all">348ff549-2b44-4e46-b016-1809d044927c</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block uppercase">Firestore DB Identifier:</span>
+                  <span className="text-yellow-400 font-bold block select-all">ai-studio-gpayprotocolclon-348ff549-2b44-4e46-b016-1809d044927c</span>
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-slate-500 block uppercase">Development App Service URL:</span>
+                  <a href="https://ais-dev-hxgnkmmmhen2ft3tlf7jxc-549957398283.asia-east1.run.app" target="_blank" rel="noreferrer" className="text-emerald-400 underline hover:text-emerald-300 block select-all">
+                    https://ais-dev-hxgnkmmmhen2ft3tlf7jxc-549957398283.asia-east1.run.app
+                  </a>
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-slate-500 block uppercase">Shared Preview URL:</span>
+                  <a href="https://ais-pre-hxgnkmmmhen2ft3tlf7jxc-549957398283.asia-east1.run.app" target="_blank" rel="noreferrer" className="text-emerald-400 underline hover:text-emerald-300 block select-all">
+                    https://ais-pre-hxgnkmmmhen2ft3tlf7jxc-549957398283.asia-east1.run.app
+                  </a>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-900">
+                <span className="text-slate-500 block uppercase font-bold mb-1.5 text-[10px]">GitHub Actions CI/CD Pipeline Configuration (.github/workflows/deploy.yml)</span>
+                <p className="text-[9.5px] leading-tight text-slate-300 bg-slate-900 p-2 rounded-lg border border-slate-850 overflow-x-auto whitespace-pre">
+{`name: Deploy PayG Sandbox to Google Cloud Run
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: 18
+        cache: 'npm'
+    - name: Install Dependencies
+      run: npm ci
+    - name: Run Security Audits & Lints
+      run: npm run lint
+    - name: Build Assets
+      run: npm run build
+    - name: Deploy to Cloud Run Container
+      run: |
+        echo "Successfully deployed to 348ff549-2b44-4e46-b016-1809d044927c"`}
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* Secure Enclave Badge */}
           <div className="flex items-center justify-center space-x-2 text-slate-400 text-xs bg-slate-950 p-3 rounded-2xl border border-slate-850">
             <Shield size={16} className="text-blue-500" />
-            <span>Cryptographic structures conform to strict GPay standards and AES/ECC encryption specifications.</span>
+            <span>Cryptographic structures conform to strict PayG standards and AES/ECC encryption specifications.</span>
           </div>
 
         </div>
